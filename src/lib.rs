@@ -10,7 +10,7 @@ pub use error::{Error, Result};
 mod smw5;
 
 #[cfg(all(target_os = "windows", target_arch = "x86"))]
-pub use smw5::{MaSound, RenderedPcm};
+pub use smw5::{MaSound, MmfPlayback, RenderedPcm};
 
 #[cfg(not(all(target_os = "windows", target_arch = "x86")))]
 mod unsupported {

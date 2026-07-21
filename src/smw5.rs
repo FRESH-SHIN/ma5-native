@@ -2,7 +2,7 @@ use std::{
     cell::Cell,
     marker::PhantomData,
     path::Path,
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
 };
 
 use libloading::Library;
@@ -64,6 +64,21 @@ pub struct MaSound {
     _not_sync: PhantomData<Cell<()>>,
 }
 
+/// A live MMF playback session that can generate PCM one block at a time.
+///
+/// The session owns both the DLL runtime and the MMF bytes because the vendor
+/// API retains a pointer to the input buffer until playback is unloaded.
+pub struct MmfPlayback {
+    owner: MaSound,
+    _mmf: Arc<[u8]>,
+    slot: u32,
+    handle: u32,
+    started: bool,
+    opened: bool,
+    loaded: bool,
+    created: bool,
+}
+
 static INSTANCE_LOCK: Mutex<()> = Mutex::new(());
 
 impl MaSound {
@@ -116,6 +131,66 @@ impl MaSound {
             sample_rate,
             samples,
         })
+    }
+
+    /// Starts an MMF session for incremental, real-time PCM generation.
+    pub fn start_mmf(mut self, mmf: Arc<[u8]>, sample_rate: u32) -> Result<MmfPlayback> {
+        let mmf_len = u32::try_from(mmf.len()).map_err(|_| Error::MmfTooLarge(mmf.len()))?;
+        self.ensure_initialized(sample_rate)?;
+
+        let slot = 1u32;
+        let created = call(&self.api, self.api.create, [slot, 0, 0, 0, 0, 0]);
+        if created == 0 || created == u32::MAX {
+            return Err(Error::ApiCallFailed {
+                name: "MaSound_Create",
+                code: created,
+            });
+        }
+
+        let handle = call(
+            &self.api,
+            self.api.load,
+            [slot, mmf.as_ptr() as Word, mmf_len, 1, 0, 0],
+        );
+        if handle == 0 || handle == u32::MAX {
+            let _ = call(&self.api, self.api.delete, [slot, 0, 0, 0, 0, 0]);
+            return Err(Error::ApiCallFailed {
+                name: "MaSound_Load",
+                code: handle,
+            });
+        }
+
+        let mut playback = MmfPlayback {
+            owner: self,
+            _mmf: mmf,
+            slot,
+            handle,
+            started: false,
+            opened: false,
+            loaded: true,
+            created: true,
+        };
+        call_zero(
+            &playback.owner.api,
+            "MaSound_Open",
+            playback.owner.api.open,
+            [slot, handle, 0, 0, 0, 0],
+        )?;
+        playback.opened = true;
+        call_zero(
+            &playback.owner.api,
+            "MaSound_Standby",
+            playback.owner.api.standby,
+            [slot, handle, 0, 0, 0, 0],
+        )?;
+        call_zero(
+            &playback.owner.api,
+            "MaSound_Start",
+            playback.owner.api.start,
+            [slot, handle, 1, 0, 0, 0],
+        )?;
+        playback.started = true;
+        Ok(playback)
     }
 
     /// Renders an MMF buffer until the vendor scheduler leaves its playing state.
@@ -229,6 +304,63 @@ impl MaSound {
         )?;
         self.initialized = true;
         Ok(())
+    }
+}
+
+impl MmfPlayback {
+    /// Generates one interleaved-time block into separate stereo channels.
+    pub fn render_stereo_i16(&mut self, left: &mut [i16], right: &mut [i16]) -> Result<()> {
+        if left.len() != right.len() {
+            return Err(Error::InvalidBufferLengths {
+                left: left.len(),
+                right: right.len(),
+            });
+        }
+        let frames =
+            u32::try_from(left.len()).map_err(|_| Error::FrameCountTooLarge(left.len()))?;
+        let _generated = call(
+            &self.owner.api,
+            self.owner.api.generate,
+            [
+                left.as_mut_ptr() as Word,
+                right.as_mut_ptr() as Word,
+                frames,
+                0,
+                0,
+                0,
+            ],
+        );
+        Ok(())
+    }
+
+    /// Returns true after the vendor scheduler leaves its playing state.
+    pub fn is_finished(&self) -> bool {
+        const CONTROL_GET_STATUS: Word = 6;
+        const STATUS_PLAYING: Word = 4;
+
+        call(
+            &self.owner.api,
+            self.owner.api.control,
+            [self.slot, self.handle, CONTROL_GET_STATUS, 0, 0, 0],
+        ) != STATUS_PLAYING
+    }
+}
+
+impl Drop for MmfPlayback {
+    fn drop(&mut self) {
+        let api = &self.owner.api;
+        if self.started {
+            let _ = call(api, api.stop, [self.slot, self.handle, 0, 0, 0, 0]);
+        }
+        if self.opened {
+            let _ = call(api, api.close, [self.slot, self.handle, 0, 0, 0, 0]);
+        }
+        if self.loaded {
+            let _ = call(api, api.unload, [self.slot, self.handle, 0, 0, 0, 0]);
+        }
+        if self.created {
+            let _ = call(api, api.delete, [self.slot, 0, 0, 0, 0, 0]);
+        }
     }
 }
 

@@ -49,6 +49,24 @@ let pcm = sound.render_mmf_to_end(&mmf, 48_000, 960)?;
 # }
 ```
 
+Real-time consumers should keep a live session and generate small blocks:
+
+```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# use std::sync::Arc;
+# let mmf: Arc<[u8]> = std::fs::read("song.mmf")?.into();
+let sound = ma5_native::MaSound::load("M5_EmuSmw5.dll")?;
+let mut playback = sound.start_mmf(mmf, 48_000)?;
+let mut left = vec![0i16; 1024];
+let mut right = vec![0i16; 1024];
+while !playback.is_finished() {
+    playback.render_stereo_i16(&mut left, &mut right)?;
+    // Send this block to the audio device before generating the next block.
+}
+# Ok(())
+# }
+```
+
 ## Optional render CLI
 
 The crate is library-first: no binary is built by default. Enable `cli` to

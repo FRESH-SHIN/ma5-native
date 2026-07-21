@@ -1,0 +1,29 @@
+[package]
+name = "ma5-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A runtime-loaded Rust interface for a user-supplied Yamaha MA-5 hardware emulator DLL"
+repository = "https://github.com/FRESH-SHIN/ma5-native"
+keywords = ["audio", "dsp", "ffi", "smaf"]
+categories = ["api-bindings", "multimedia::audio"]
+autobins = false
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE-MIT"]
+
+[features]
+default = []
+cli = []
+
+[[bin]]
+name = "ma5-render"
+path = "src/bin/ma5-render.rs"
+required-features = ["cli"]
+
+[dependencies]
+libloading = "0.8"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+panic = "abort"

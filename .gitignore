@@ -1,0 +1,15 @@
+/target/
+Cargo.lock
+*.dll
+*.DLL
+*.lib
+*.LIB
+*.a
+*.pcm
+*.wav
+*.log
+*.dmp
+*.bin
+/vendor/
+/sdk/
+/.local/

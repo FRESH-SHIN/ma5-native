@@ -38,6 +38,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+For interactive playback, let the vendor scheduler decide when the song ends:
+
+```rust,no_run
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let mmf = std::fs::read("song.mmf")?;
+let mut sound = ma5_native::MaSound::load("M5_EmuSmw5.dll")?;
+let pcm = sound.render_mmf_to_end(&mmf, 48_000, 960)?;
+# Ok(())
+# }
+```
+
 ## Optional render CLI
 
 The crate is library-first: no binary is built by default. Enable `cli` to

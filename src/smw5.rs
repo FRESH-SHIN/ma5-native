@@ -26,6 +26,7 @@ struct Api {
     standby: GenericFn,
     start: GenericFn,
     stop: GenericFn,
+    control: GenericFn,
     generate: GenericFn,
 }
 
@@ -110,6 +111,35 @@ impl MaSound {
             }
             rendered += count as u64;
         }
+        drop(session);
+        Ok(RenderedPcm {
+            sample_rate,
+            samples,
+        })
+    }
+
+    /// Renders an MMF buffer until the vendor scheduler leaves its playing state.
+    pub fn render_mmf_to_end(
+        &mut self,
+        mmf: &[u8],
+        sample_rate: u32,
+        chunk_frames: usize,
+    ) -> Result<RenderedPcm> {
+        let mmf_len = u32::try_from(mmf.len()).map_err(|_| Error::MmfTooLarge(mmf.len()))?;
+        let mut session = self.start_session(mmf.as_ptr() as Word, mmf_len, sample_rate)?;
+        let chunk_frames = chunk_frames.max(1);
+        let mut samples = Vec::new();
+
+        while session.is_playing() {
+            let mut left = vec![0i16; chunk_frames];
+            let mut right = vec![0i16; chunk_frames];
+            session.generate(&mut left, &mut right)?;
+            for (left, right) in left.into_iter().zip(right) {
+                samples.push(left);
+                samples.push(right);
+            }
+        }
+
         drop(session);
         Ok(RenderedPcm {
             sample_rate,
@@ -224,6 +254,17 @@ struct Session<'a> {
 }
 
 impl Session<'_> {
+    fn is_playing(&self) -> bool {
+        const CONTROL_GET_STATUS: Word = 6;
+        const STATUS_PLAYING: Word = 4;
+
+        call(
+            &self.owner.api,
+            self.owner.api.control,
+            [self.slot, self.handle, CONTROL_GET_STATUS, 0, 0, 0],
+        ) == STATUS_PLAYING
+    }
+
     fn generate(&mut self, left: &mut [i16], right: &mut [i16]) -> Result<()> {
         if left.len() != right.len() {
             return Err(Error::InvalidBufferLengths {
@@ -309,6 +350,7 @@ impl Api {
             standby: symbol!("MaSound_Standby"),
             start: symbol!("MaSound_Start"),
             stop: symbol!("MaSound_Stop"),
+            control: symbol!("MaSound_Control"),
             generate: symbol!("MaSound_Generate"),
         })
     }
